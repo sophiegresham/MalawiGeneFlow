@@ -1,0 +1,218 @@
+
+import subprocess
+from scipy import stats
+import pandas as pd
+import numpy as np
+import os, yaml, allel
+import importlib
+import pysam
+import logging
+from matplotlib import pyplot as plt
+#from pypopgen3.modules import vcfpandas as vp
+#from pypopgen3.modules import diversity as dv
+jn = os.path.join
+logging.getLogger("snakemake").setLevel(logging.ERROR)
+
+configfile: "config.yaml"
+
+wildcard_constraints:
+    chrom = "(\w+|all_chrom)",
+    vcf_extension = "(vcf|vcf.gz|bcf)",
+    inverted = "(inverted|non_inverted)"
+    
+ana_dir = config['ana_dir']
+
+#approx haplotype location
+#35276182 35301193
+
+#whole haplotype:
+#LS420036.1 35276054 35299846
+#shorter haplotype:
+#LS420036.1 35276717 35285829
+
+CHROMOSOMES = [f'chr{i}' for i in range(1,24) if i!= 21]
+#CHROMOSOMES = 'chr12'
+
+chrom_length = pd.read_csv('/scratch/antwerpen/grp/asvardal/projects/kearad/data/reference/fAstCal1.2/GCA_900246225.3_fAstCal1.2_genomic_chromnames_mt.fa.fai', sep='\t',usecols=[0,1],names=['chrom','len'],index_col=0, squeeze=True)
+                           
+inversion_positions = pd.read_csv("/scratch/antwerpen/grp/asvardal/projects/cichlid/analyses/Inversion_finder_Jaysmita/Inversions_from_Moritz/inversion_positions.tsv", sep='\t', header=None, names=['chrom','start','end'], index_col=0)
+
+##############################
+########## rule all ##########
+
+rule all:
+    input:
+        expand(ana_dir + "/_data/results/distance_whole_genome_windows/window_pwd.chr1.10000.5000.mysampleset.tsv")
+
+        
+##############################################
+########## generate distance matrix ##########
+
+#distance matrix for all samples and whole genome
+rule distancematrix_allsamples_allchr:
+    input:
+        vcf = "{vcf_dir}/Malawicallsetfeb2021.pass.snps.biallelic.{{chrom}}.bcf".format(vcf_dir = config["vcf_dir"])
+    output:
+        distance = "{ana_dir}/_data/results/distancematrix/Malawicallsetfeb2021.pass.snps.biallelic.{{chrom}}.allsamples.allsites.distance.dist".format(ana_dir = config["ana_dir"])
+    threads: 1
+    resources:
+        walltime=12,
+        mem_gb=4
+    shell:
+         "plink  --threads {threads} --vcf {input.vcf} --distance square --chr-set 23 'no-x' 'no-y' 'no-xy' 'no-mt' -out {output.distance}"
+
+rule distancematrix_allsamples_allchr_all:
+    input:
+        expand(rules.distancematrix_allsamples_allchr.output.distance, chrom = CHROMOSOMES)
+
+#to run for all chr:
+#snakemake distancematrix_allsamples_allchr_all -p --profile qsub_hs_biomina 2>&1 --rerun-incomplete --keep-going | tee ./logfiles/distancematrix_allsamples_allchr_all.log
+
+START = "35276054"
+END = "35299846"
+
+#distance matrix for all samples and chr18 haplotype
+rule distancematrix_allsamples_haplotype:
+    input:
+        vcf = "{vcf_dir}/Malawicallsetfeb2021.sf_stringent1.pass.snps.biallelic.chr18.bcf".format(vcf_dir = config["vcf_dir"])
+    output:
+        distance = "{ana_dir}/_data/results/distancematrix/Malawicallsetfeb2021.pass.snps.biallelic.chr18_serhaplo_{start}-{end}.allsamples.allsites.distance.dist".format(ana_dir = config["ana_dir"], start=START, end=END)
+    threads: 1
+#        resources:
+#                walltime=12,
+#                mem_gb=4
+    shell:
+         "plink  --threads {threads} --vcf {input.vcf} --distance square -chr 18 --from-bp {START} --to-bp {END} --chr-set 23 'no-x' 'no-y' 'no-xy' 'no-mt' -out {output.distance}"
+
+
+###########################################################################################################
+########## generate distance matrix with ancestral state added as a sample and inversion removed ##########
+
+#distance matrix for all samples and whole genome - with ancestral state added as a sample
+
+rule distancematrix_allsamples_allchr_ancsample:
+    input:          
+        vcf = "{vcf_dir}/Malawicallsetfeb2021.sf_stringent1.pass.snps.biallelic.anc_samp.noninversion.{{chrom}}.vcf.gz".format(vcf_dir = config["vcf_dir"])
+    output:
+        distance = "{ana_dir}/_data/results/distancematrix/Malawicallsetfeb2021.pass.snps.biallelic.anc_samp.noninversion.{{chrom}}.allsamples.allsites.distance.dist".format(ana_dir = config["ana_dir"])
+    threads: 1
+    resources:
+        walltime=24
+    shell:
+         "plink  --threads {threads} --vcf {input.vcf} --distance square --chr-set 23 'no-x' 'no-y' 'no-xy' 'no-mt' -out {output.distance}"
+
+rule distancematrix_allsamples_allchr_ancsample_all:
+    input:
+        expand(rules.distancematrix_allsamples_allchr_ancsample.output.distance, chrom = CHROMOSOMES)
+        
+#snakemake distancematrix_allsamples_allchr_ancsample_all -p --profile qsub_hs_biomina 2>&1 --rerun-incomplete --keep-going | tee ./logfiles/distancematrix_allsamples_allchr_ancsample_noninversion_all.log
+
+
+#########
+
+#april 2023 - rerunning because at least one sample (SRR9675381) appears to be missing from the previous run
+#changing the vcf to the same one used for dsuite dtrios
+
+rule distancematrix_allsamples_allchr_ancsample_april23:
+    input:          
+        vcf = "{vcf_dir}/Malawicallsetfeb2021.sf_stringent1.pass.snps.biallelic.anc_samp.noninversion.{{chrom}}.vcf.gz".format(vcf_dir = config["vcf_dir"])
+    output:
+        distance = "{ana_dir}/_data/results/distancematrix/Malawicallsetfeb2021.pass.snps.biallelic.anc_samp.noninversion.{{chrom}}.allsamples.allsites.distance.dist.april2023".format(ana_dir = config["ana_dir"])
+    threads: 1
+    resources:
+        walltime=24
+    shell:
+         "plink  --threads {threads} --vcf {input.vcf} --distance square --chr-set 23 'no-x' 'no-y' 'no-xy' 'no-mt' -out {output.distance}"
+
+rule distancematrix_allsamples_allchr_ancsample_april23_all:
+    input:
+        expand(rules.distancematrix_allsamples_allchr_ancsample_april23.output.distance, chrom = CHROMOSOMES)
+
+#snakemake distancematrix_allsamples_allchr_ancsample_april23_all --cores 22 -p --profile slurm-simple3 2>&1 --rerun-incomplete --keep-going | tee ./logfiles/distancematrix_allsamples_allchr_ancsample_noninversion_all_april2023.log
+
+
+#########
+
+
+#distance matrix for all samples and chr18 haplotype - with ancestral state added as a sample
+
+#whole haplotype:
+#LS420036.1 35276054 35299846
+#shorter haplotype:
+#LS420036.1 35276717 35285829
+
+START = "35276054"
+END = "35299846"
+
+rule distancematrix_allsamples_haplotype_ancsample:
+    input: 
+        vcf = "{vcf_dir}/Malawicallsetfeb2021.sf_stringent1.pass.snps.biallelic.anc_samp.noninversion.chr18.vcf.gz".format(vcf_dir = config["vcf_dir"])
+    output:
+        distance = "{ana_dir}/_data/results/distancematrix/Malawicallsetfeb2021.pass.snps.biallelic.anc_samp.noninversion.chr18_serhaplo_{start}-{end}.allsamples.allsites.distance.dist".format(ana_dir = config["ana_dir"], start=START, end=END)
+    threads: 1
+    resources:
+        walltime=12
+    shell:
+         "plink  --threads {threads} --vcf {input.vcf} --distance square -chr 18 --from-bp {START} --to-bp {END} --chr-set 23 'no-x' 'no-y' 'no-xy' 'no-mt' -out {output.distance}"
+
+#snakemake distancematrix_allsamples_haplotype_ancsample -p --profile qsub_hs_biomina 2>&1 --rerun-incomplete --keep-going | tee ./logfiles/distancematrix_allsamples_haplotype_ancsample.noninversion2.log
+
+
+
+############################################################################
+########## generate pairwise differences for windows along genome ##########
+
+
+#produced test vcf with:
+#bcftools view --regions chr1:1-100000 -s cichlid7020107,cichlid7020258,cichlid6978779,SRR12700817,cichlid7050675 /scratch/antwerpen/grp/asvardal/projects/cichlid/analyses/2019CallsetInvestigation_Sophie/analyses/callsetFeb2021/variantcalling/variantcalling/fAstCal1.2/Malawicallsetfeb2021/Malawicallsetfeb2021.sf_stringent1.pass.snps.biallelic.anc_samp.chr1.vcf.gz > test.chr1.1-100000.testsamples.biallelic.acn_samp.vcf
+#bgzip test.chr1.1-100000.testsamples.biallelic.acn_samp.vcf
+#tabix -p vcf test.chr1.1-100000.testsamples.biallelic.acn_samp.vcf.gz 
+
+#def get_vcf(wildcards):
+#    if wildcards.phased == 'phased':
+#        vcf_fn = jn(vcf_dir,'no_if.sf_stringent1/phased',
+#                    "GWAS1465.no_if.sf_stringent1.pass.snps.biallelic.{}.phased.ancestral_as_sample.vcf.gz")
+#    elif wildcards.phased == 'unphased':
+#        vcf_fn = jn(vcf_dir,'no_if.sf_stringent1',
+#                    "GWAS1465.no_if.sf_stringent1.pass.snps.biallelic.ancestral_as_sample.all_chrom.vcf.gz")
+#    return vcf_fn.format(wildcards.chrom)
+
+sample_sets = {'mysampleset':['cichlid7020107','cichlid7020258', 'cichlid6978779', 'SRR12700817', 'cichlid7050675']}
+
+rule window_pwd:
+   input:
+        #vcf = "{vcf_dir}/Malawicallsetfeb2021.sf_stringent1.pass.snps.biallelic.anc_samp.noninversion.{}.vcf.gz".format(vcf_dir = config["vcf_dir"], wildcards.chrom)
+        vcf = ana_dir + "/_data/test.chr1.1-100000.testsamples.biallelic.acn_samp.vcf.gz"
+   output:
+         window_pwd = ana_dir + "/_data/results/distance_whole_genome_windows/window_pwd.{chrom}.{window}.{step}.{sampleset}.tsv"
+   resources:
+       walltime = 72,
+       mem_gb = 8
+   params:
+       samples = lambda wildcards: sample_sets[wildcards.sampleset]
+   run:
+       with open(output.window_pwd, 'w') as f:
+           chrom = wildcards.chrom
+           i=0
+           for start in range(0,chrom_length[chrom],int(wildcards.step)):
+               end = start + int(wildcards.window)
+               d = dv.get_hap_pwd_arr(input.vcf, chrom=wildcards.chrom, start=start, end=end, samples=params.samples, ancestral_sample=None)
+               np.savetxt(f, [d],  fmt='%i', delimiter='\t')
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

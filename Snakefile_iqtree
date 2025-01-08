@@ -1,0 +1,311 @@
+
+#IQtree Sophie June 2023
+#code adapted from Henrique
+
+
+#edit 20.03.2024 - several changes made to tree:
+#remove H. kilossana (SRR9673933) and added in A.bloyeti (CICHM16429779)
+#several species names have change - see metadata  cichlid_callset_mt_2024-02-23_callset202103_malawi2perspecies_newalignments.tsv
+#added in sampling locations into species name
+#with these changes - needed to rerun from step 4
+
+###################################
+
+# Load the conda environment setup
+shell.prefix("source /data/antwerpen/grp/asvardal/miniconda3/etc/profile.d/conda.sh && conda activate hscon5 && ")
+
+# Import necessary modules
+import pandas as pd
+import dendropy
+
+# Load the configuration file
+configfile: "config.yaml"
+
+#CHROMOSOMES = [f'chr{i}' for i in range(2,24) if i!= 21]
+CHROMOSOMES = ['chr3']
+
+# Get chromosome names and lengths from reference FASTA index file - exlude scaffolds and chrM
+fai_file = config['reference'] + '.fai'
+chromosome_lengths = {}
+with open(fai_file, 'r') as f:
+    for line in f:
+        if line.startswith('chr') and not line.startswith('chrM'):
+            fields = line.split('\t')
+            chromosome_lengths[fields[0]] = int(fields[1])
+            
+# Extract list of chromosome names from the dictionary
+chromosomes = list(chromosome_lengths.keys())         
+
+# Configuration for phylogenetic analysis using non-overlapping genome windows.
+# The generate_windows function creates a list of adjacent, non-overlapping genome windows for each chromosome
+# based on their lengths and the defined window size.
+WINDOW_SIZE = config['window_size']
+
+def generate_windows(chromosome_lengths, window_size):
+    window_dict = {}
+    for chromosome, length in chromosome_lengths.items():
+        num_windows = length // window_size
+        #num_windows = 2
+        chr_windows = [f"{chromosome}:{i*window_size+1}-{(i+1)*window_size}" for i in range(num_windows)]
+        window_dict[chromosome] = chr_windows
+    return window_dict
+
+# Generate the list of windows based on the lengths of the chromosomes and the defined window size.
+window_dict= generate_windows(chromosome_lengths, WINDOW_SIZE)
+
+# Convert window size to KB
+window_size_kb = config['window_size'] // 1000
+
+def generate_region_chr_pairs():
+  out_list=[]
+  for chr_key in CHROMOSOMES:
+    region_list=window_dict[chr_key]
+    out_list.extend([(chr_key,region) for region in region_list])
+  return out_list
+
+#####
+
+rule all:
+    input:
+        #run calculate trees
+#        expand(f"july_iqtree/{window_size_kb}KB/{{pairing[0]}}_{{pairing[1]}}.treefile", pairing=generate_region_chr_pairs())
+        #remove specific samples from tree
+#        expand(f"july_iqtree/{window_size_kb}KB/species_tree_samplesrm_20.03.2024.tre")
+        #run the renaming of the tre file
+#        expand(f"july_iqtree/{window_size_kb}KB/species_tree_samplesrm_newname_20.03.2024.tre")
+        #alternative renameing of tre file
+#        expand(f"july_iqtree/{window_size_kb}KB/species_tree_samplesrm_newname_speciesname_20.03.2024.tre")
+        #alternative renaming of tre file
+        expand(f"july_iqtree/{window_size_kb}KB/species_tree_samplesrm_newname_speciesname_samplenumber_20.03.2024.tre")
+        #alternative renaming of tre file
+#        expand(f"july_iqtree/{window_size_kb}KB/species_tree_samplesrm_newname_speciesname_catchmentcode_20.03.2024.tre")
+        
+        
+        
+#######        
+#Step 1  
+#######
+
+# Rule for running IQtree in windows
+rule calculate_trees:
+    input:
+        vcf= "/scratch/antwerpen/grp/asvardal/projects/cichlid/analyses/2019CallsetInvestigation_Sophie/analyses/callsetFeb2021/dsuite/dtrios/_data/inputfiles/vcf/Malawicallsetfeb2021.sf_stringent1.pass.snps.biallelic.anc_samp.noninversion.{chrom}.vcf.gz"
+    output:
+        tree = f"july_iqtree/{window_size_kb}KB/{{chrom}}_{{window}}.treefile"
+    params:
+        vcf2phylip = "/scratch/antwerpen/grp/asvardal/projects/cichlid/analyses/2019CallsetInvestigation_Sophie/software/vcf2phylip/vcf2phylip.py",
+        #threads = 7,
+        model = "GTR+G+I",
+        outgroup = "ancestral"
+    threads: 7
+    resources:
+        cpus_per_task = 7,
+        walltime = 24,
+        mem_mb = 4000
+    wildcard_constraints:
+        chrom = '|'.join(CHROMOSOMES),
+        #window = '|'.join(window_dict)
+    shell:"""
+        bcftools view -r {wildcards.window} {input.vcf} > {wildcards.chrom}_{wildcards.window}.vcf
+        {params.vcf2phylip} -i {wildcards.chrom}_{wildcards.window}.vcf  
+        iqtree -s {wildcards.chrom}_{wildcards.window}.min4.phy -T {threads} -m {params.model} -o {params.outgroup} --prefix july_iqtree/{window_size_kb}KB/{wildcards.chrom}_{wildcards.window} --redo-tree
+        rm {wildcards.chrom}_{wildcards.window}.vcf {wildcards.chrom}_{wildcards.window}.min4.phy
+    """
+
+#execute with:
+#snakemake all -p --profile slurm-simple4 --jobs 100 --printshellcmds --rerun-incomplete --keep-going 
+
+#estimated run time - 2 hours per job, ~400 jobs per chromosome, 100 jobs run at once = 8 hours per chromosome
+
+#17.07.2023
+#run 6107 of 8087 steps (76%) completed
+#some windows failed either because there were samples which were problematic (too much missing data), or because
+#the windows fell within a inversion which had been removed (no variants are in these windows)
+
+#######        
+#Step 2  
+#######
+
+#concatenate all trees into a single tre file:
+#cat *.treefile > all_window_trees.tre
+
+#######        
+#Step 3  
+#######
+
+#build consensus tree using ASTRAL:
+#run interatively 
+#time java -D"java.library.path=/scratch/antwerpen/grp/asvardal/projects/cichlid/analyses/2019CallsetInvestigation_Sophie/software/ASTRAL/Astral/lib/" -jar /scratch/antwerpen/grp/asvardal/projects/cichlid/analyses/2019CallsetInvestigation_Sophie/software/ASTRAL/Astral/astral.5.15.5.jar -i all_window_trees.tre -o species_tree.tre  
+
+#for entire genome takes a few hours to run
+#real    427m41.489s
+#user    5366m24.175s
+#sys     5m27.439s
+
+#######        
+#Step 4  
+#######
+
+#remove specific samples - these were removed from the metadata before but still remain in the vcf
+
+#want to keep certain samples for the tree that will be removed for later analyses:
+#CICHM16429779 - A.bloyeti
+
+#remove_samples = ['SRR12700906', 'SRR12700905', 'CICHM16429779', 'cichlid7020322', 'cichlid6994245', 'cichlid6994232', 'cichlid7020252', 'cichlid6994220', 'cichlid7020212', 'ILBCDS6101013']
+remove_samples = ['SRR12700906', 'SRR12700905', 'cichlid7020322', 'cichlid6994245', 'cichlid6994232', 'cichlid7020252', 'cichlid6994220', 'cichlid7020212', 'ILBCDS6101013', 'SRR9673933']
+
+rule remove_samples_from_tree:
+    input:
+        newtree = "july_iqtree/{window_size_kb}KB/species_tree.tre"
+    output:
+        modified_tree = "july_iqtree/{window_size_kb}KB/species_tree_samplesrm_20.03.2024.tre"
+    run:
+        import dendropy
+        # Read the tree from the original .tre file
+        tree = dendropy.Tree.get(path=input.newtree, schema="newick")
+        # Prune (remove) the specified samples from the tree
+        tree.prune_taxa_with_labels(remove_samples)
+        # Write the modified tree to a new .tre file
+        tree.write(path=output.modified_tree, schema="newick")
+
+#unhash the rule all output above and run rule with "snakemake --cores 1"
+
+
+##############        
+#Step 5 - ver1 
+##############
+
+#change the sample names in the resultant tree to have the species name as well
+
+def read_name_replacements(tsv_file):
+    df = pd.read_csv(tsv_file, sep='\t', usecols=["sequence_id", "full_name_catchment_noruahavictoria"])
+    return dict(zip(df["sequence_id"], df["full_name_catchment_noruahavictoria"]))
+
+#def read_name_replacements(tsv_file):
+#    df = pd.read_csv(tsv_file, sep='\t', usecols=["sequence_id", "full_name"])
+#    return dict(zip(df["sequence_id"], df["full_name"]))
+
+
+def rename_samples_in_tree(input_file, output_file, name_replacements):
+    with open(input_file, "r") as infile, open(output_file, "w") as outfile:
+        for line in infile:
+            for old_name, new_name in name_replacements.items():
+                # Combine "full_name" and "sequence_id" with an underscore
+                combined_name = str(new_name) + "_" + str(old_name)
+                line = line.replace(old_name, combined_name)
+            outfile.write(line)         
+
+#replace sample names with species name 
+rule replace_tree_sample_names:
+    input:
+        originaltree = "july_iqtree/{window_size_kb}KB/species_tree_samplesrm_20.03.2024.tre",
+#        metadata = "/scratch/antwerpen/grp/asvardal/projects/cichlid/analyses/2019CallsetInvestigation_Sophie/metadata/cichlid_callset_mt_2023-11-05_callset202103_malawi2perspecies_newalignments.tsv"
+        metadata = "/scratch/antwerpen/grp/asvardal/projects/cichlid/analyses/2019CallsetInvestigation_Sophie/metadata/cichlid_callset_mt_2024-02-23_callset202103_malawi2perspecies_newalignments_subversion_tree_rm_kilossana_add_bloyeti.tsv"
+    output:
+        newtree = "july_iqtree/{window_size_kb}KB/species_tree_samplesrm_newname_20.03.2024.tre"
+    params:
+        name_replacements = lambda wildcards, input: read_name_replacements(input.metadata)
+    run:
+        rename_samples_in_tree(input.originaltree, output.newtree, params.name_replacements)
+
+#unhash the rule all output above and run rule with "snakemake --cores 1"
+
+##############       
+#Step 5 - ver2 
+##############
+
+#or change the sample names in the tree to just have the species name
+
+def read_name_replacements2(tsv_file):
+    df = pd.read_csv(tsv_file, sep='\t', dtype={"full_name": str}, usecols=["sequence_id", "full_name_catchment_noruahavictoria"])
+    return df.set_index("sequence_id")["full_name_catchment_noruahavictoria"].to_dict()
+
+rule replace_tree_sample_names2:
+    input:
+        originaltree = "july_iqtree/{window_size_kb}KB/species_tree_samplesrm_20.03.2024.tre",
+        metadata = "/scratch/antwerpen/grp/asvardal/projects/cichlid/analyses/2019CallsetInvestigation_Sophie/metadata/cichlid_callset_mt_2024-02-23_callset202103_malawi2perspecies_newalignments_subversion_tree_rm_kilossana_add_bloyeti.tsv"
+    output:
+        newtree = "july_iqtree/{window_size_kb}KB/species_tree_samplesrm_newname_speciesname_20.03.2024.tre"
+    params:
+        name_replacements = lambda wildcards, input: read_name_replacements2(input.metadata)
+    run:
+        with open(input.originaltree, "r") as infile, open(output.newtree, "w") as outfile:
+            tree_content = infile.read()
+            for old_name, new_name in params.name_replacements.items():
+                tree_content = tree_content.replace(str(old_name), str(new_name))
+            outfile.write(tree_content)
+            
+#unhash the rule all output above and run rule with "snakemake --cores 1"
+
+##############       
+#Step 5 - ver3 
+##############
+
+#or change the sample names in the tree to just have the species name
+
+def read_name_replacements3(tsv_file):
+    df = pd.read_csv(tsv_file, sep='\t', dtype={"full_name": str}, usecols=["sequence_id", "full_name_catchment_samplenumber"])
+    return df.set_index("sequence_id")["full_name_catchment_samplenumber"].to_dict()
+
+rule replace_tree_sample_names3:
+    input:
+        originaltree = "july_iqtree/{window_size_kb}KB/species_tree_samplesrm_20.03.2024.tre",
+        metadata = "/scratch/antwerpen/grp/asvardal/projects/cichlid/analyses/2019CallsetInvestigation_Sophie/metadata/cichlid_callset_mt_2024-02-23_callset202103_malawi2perspecies_newalignments_subversion_tree_rm_kilossana_add_bloyeti.tsv"
+    output:
+        newtree = "july_iqtree/{window_size_kb}KB/species_tree_samplesrm_newname_speciesname_samplenumber_20.03.2024.tre"
+    params:
+        name_replacements = lambda wildcards, input: read_name_replacements3(input.metadata)
+    run:
+        with open(input.originaltree, "r") as infile, open(output.newtree, "w") as outfile:
+            tree_content = infile.read()
+            for old_name, new_name in params.name_replacements.items():
+                tree_content = tree_content.replace(str(old_name), str(new_name))
+            outfile.write(tree_content)
+            
+#unhash the rule all output above and run rule with "snakemake --cores 1"
+
+
+##############       
+#Step 5 - ver4 
+##############
+
+#version with non-malawi catchments locations as codes instead of the full name
+
+def read_name_replacements4(tsv_file):
+    df = pd.read_csv(tsv_file, sep='\t', dtype={"full_name": str}, usecols=["sequence_id", "full_name_catchment_code"])
+    return df.set_index("sequence_id")["full_name_catchment_code"].to_dict()
+
+rule replace_tree_sample_names4:
+    input:
+        originaltree = "july_iqtree/{window_size_kb}KB/species_tree_samplesrm_20.03.2024.tre",
+        metadata = "/scratch/antwerpen/grp/asvardal/projects/cichlid/analyses/2019CallsetInvestigation_Sophie/metadata/cichlid_callset_mt_2024-02-23_callset202103_malawi2perspecies_newalignments_subversion_tree_rm_kilossana_add_bloyeti.tsv"
+    output:
+        newtree = "july_iqtree/{window_size_kb}KB/species_tree_samplesrm_newname_speciesname_catchmentcode_20.03.2024.tre"
+    params:
+        name_replacements = lambda wildcards, input: read_name_replacements4(input.metadata)
+    run:
+        with open(input.originaltree, "r") as infile, open(output.newtree, "w") as outfile:
+            tree_content = infile.read()
+            for old_name, new_name in params.name_replacements.items():
+                tree_content = tree_content.replace(str(old_name), str(new_name))
+            outfile.write(tree_content)
+            
+#unhash the rule all output above and run rule with "snakemake --cores 1"
+
+            
+#######        
+#Step 6  
+#######
+
+#scp to local computer:
+#scp hsnode2:/scratch/antwerpen/grp/asvardal/projects/cichlid/analyses/2019CallsetInvestigation_Sophie/analyses/callsetFeb2021/iqtree/files/july_iqtree/100KB/species_tree_samplesrm_newname_20.03.2024.tre ~/Dropbox/PhD/Project/Malawi_Outgroup_callset_2021/analyses/phylo/iqtree/
+
+#scp hsnode2:/scratch/antwerpen/grp/asvardal/projects/cichlid/analyses/2019CallsetInvestigation_Sophie/analyses/callsetFeb2021/iqtree/files/july_iqtree/100KB/species_tree_samplesrm_newname_speciesname_20.03.2024.tre ~/Dropbox/PhD/Project/Malawi_Outgroup_callset_2021/analyses/phylo/iqtree/
+    
+#scp hsnode2:/scratch/antwerpen/grp/asvardal/projects/cichlid/analyses/2019CallsetInvestigation_Sophie/analyses/callsetFeb2021/iqtree/files/july_iqtree/100KB/species_tree_samplesrm_newname_speciesname_catchmentcode_20.03.2024.tre ~/Dropbox/PhD/Project/Malawi_Outgroup_callset_2021/analyses/phylo/iqtree/    
+
+#scp hsnode2:/scratch/antwerpen/grp/asvardal/projects/cichlid/analyses/2019CallsetInvestigation_Sophie/analyses/callsetFeb2021/iqtree/files/july_iqtree/100KB/species_tree_samplesrm_newname_speciesname_samplenumber_20.03.2024.tre ~/Dropbox/PhD/Project/Malawi_Outgroup_callset_2021/analyses/phylo/iqtree/
+
+
+
+

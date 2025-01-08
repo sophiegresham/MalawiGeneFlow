@@ -1,0 +1,55 @@
+
+#dsuite dinvestigate
+#28.06.2023
+
+#run dinvestigate to follow up on dtrios results which showed signficant dstats between the Malawi clade and Orthochromis group and gigliolii (as well as ruaha blue), in reference to victoria species as P1
+
+#the sets input file gives the species ID as the group (malawi or a non-malawi group)
+#the following trios will be run:
+#LVRS    malawi  Serr_Pharyng_Sarg_Thora Outgroup
+#LVRS    malawi  Orthochromis Outgroup
+#LVRS    malawi  gigliolii Outgroup
+#LVRS    malawi  ruaha_blue Outgroup
+#LVRS    malawi  Pseudo_Cteno_Ortho2 Outgroup
+
+#use the ancestral state as the outgroup
+#run trios on three different window sizes:  50, 100 SNPs and 1000 SNPs
+
+shell.prefix("source /data/antwerpen/grp/asvardal/share/hscon5_setup.sh; ") 
+
+CHROMOSOMES = [f'chr{i}' for i in range(1,24) if i!= 21]
+#CHROMOSOMES = ['chr18'] #test
+
+rule all:
+    input:
+        expand("dinvestigate_{chrom}_hybridswarm_50snpwindow", chrom=CHROMOSOMES)
+      
+        
+rule dinvestigate_hybridswarm:
+    input:
+        vcf = "/scratch/antwerpen/grp/asvardal/projects/cichlid/analyses/2019CallsetInvestigation_Sophie/analyses/callsetFeb2021/dsuite/dtrios/_data/inputfiles/vcf/Malawicallsetfeb2021.sf_stringent1.pass.snps.biallelic.anc_samp.noninversion.{chrom}.vcf.gz",
+        #vcf = "/scratch/antwerpen/grp/asvardal/projects/cichlid/analyses/2019CallsetInvestigation_Sophie/analyses/callsetFeb2021/dsuite/dinvestigate/_data/inputfiles/chr18_serranochromis_haplotype/testfiles_11.10/vcf_{chrom}_1-2000000.vcf.gz", #test vcf
+        sets = "/scratch/antwerpen/grp/asvardal/projects/cichlid/analyses/2019CallsetInvestigation_Sophie/analyses/callsetFeb2021/dsuite/dinvestigate_hybridswarm_june2023/_data/inputfiles/dinvestigate_sets_file_28.06.2023.txt",
+        testtrios = "/scratch/antwerpen/grp/asvardal/projects/cichlid/analyses/2019CallsetInvestigation_Sophie/analyses/callsetFeb2021/dsuite/dinvestigate_hybridswarm_june2023/_data/inputfiles/dinvestigate_trios_28.06.2023.txt"
+    output:
+        simname = "dinvestigate_{chrom}_hybridswarm_50snpwindow"
+    resources:
+        walltime = 24
+    params:
+        outbase = lambda wildcards: "dinvestigate_{}_hybridswarm_50snpwindow".format(wildcards.chrom)
+    shell:
+        "module load GCC;"
+        "~/Dsuite/Build/Dsuite Dinvestigate --window=50,50 --run-name {params.outbase} {input.vcf} {input.sets} {input.testtrios};"
+
+
+#rule dinvestigate_hybridswarm_all:
+#    input:
+#        expand(rules.dinvestigate_hybridswarm.output.simname, chrom = CHROMOSOMES)
+        
+        
+#execute with:
+#snakemake -p --profile slurm-simple4 --printshellcmds --rerun-incomplete --keep-going | tee ./logfiles/dinvestigate_hybridswarm_all_50snps_28.06.2023.log
+
+#run time 1000snps - approx 2 hours
+
+ 
